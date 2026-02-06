@@ -75,3 +75,4 @@ dependencies:
   - pycparser=2.23
   - pip:
       - pymupdf==1.26.7
+      - gunicorn==21.2.0  # 添加这一行      
