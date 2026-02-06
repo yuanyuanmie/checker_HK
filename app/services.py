@@ -3,41 +3,36 @@ import os
 import requests
 import fitz
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.config import settings, REGULATORY_QUESTIONS
 from app.utils import load_question_contexts, format_timestamp
 
-
 class RegulatoryAnalysisService:
     def __init__(self):
-        self.base64_images = None
         self.question_contexts = load_question_contexts(settings.json_path)
-        self._initialize_pdf()
+        # 不再在初始化时加载 PDF
 
-    def _initialize_pdf(self):
-        """初始化PDF转换"""
-        try:
-            if not os.path.exists(settings.pdf_path):
-                raise FileNotFoundError(f"PDF file not found: {settings.pdf_path}")
-
-            self.base64_images = self._pdf_to_base64_images()
-        except Exception as e:
-            print(f"PDF initialization failed: {str(e)}")
-            raise
-
-    def _pdf_to_base64_images(self, dpi: int = 150) -> List[str]:
+    def _pdf_to_base64_images(self, pdf_path: str, dpi: int = 150) -> List[str]:
         """将 PDF 转换为 Base64 编码的图像列表"""
-        doc = fitz.open(settings.pdf_path)
-        total_pages = len(doc)
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+        
+        doc = fitz.open(pdf_path)
+        try:
+            total_pages = len(doc)
+            print(f"Processing PDF: {pdf_path} ({total_pages} pages)")
 
-        base64_images = []
-        for i, page in enumerate(doc):
-            pix = page.get_pixmap(dpi=dpi)
-            img_data = pix.tobytes("png")
-            b64 = base64.b64encode(img_data).decode("utf-8")
-            base64_images.append(b64)
-
-        return base64_images
+            base64_images = []
+            for i, page in enumerate(doc):
+                pix = page.get_pixmap(dpi=dpi)
+                img_data = pix.tobytes("png")
+                b64 = base64.b64encode(img_data).decode("utf-8")
+                base64_images.append(b64)
+                print(f"  Page {i+1}/{total_pages} converted")
+            
+            return base64_images
+        finally:
+            doc.close()  # 确保资源释放
 
     def _call_qwen_api(self, question_text: str, base64_images: list, max_retries: int = 3) -> str:
         """调用多模态模型API（带重试机制）"""
@@ -50,7 +45,7 @@ class RegulatoryAnalysisService:
         for b64 in base64_images:
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"}
+                "image_url": {"url": f"image/png;base64,{b64}"}
             })
 
         data = {
@@ -70,7 +65,6 @@ class RegulatoryAnalysisService:
             except requests.exceptions.RequestException as e:
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
 
-            # 指数退避策略
             wait_time = 2 ** attempt
             time.sleep(wait_time)
 
@@ -79,7 +73,7 @@ class RegulatoryAnalysisService:
     def _create_analysis_prompt(self, question_text: str, context_text: str) -> str:
         """创建分析提示词"""
         return (
-            f"You are a senior regulatory compliance analyst specializing in HKMA's Banking (Capital) Rules (BCR), particularly the IRB approach for credit risk. "
+            f"You are a senior regulatory compliance analyst specializing in HKMA's Banking (Capital) Rules (BCR), particularly the IRB approach for credit risk.  "
             f"Analyze the provided document images and respond to the regulatory question with strict adherence to BCR requirements.\n\n"
             f"Regulatory Question:\n{question_text}\n\n"
             f"Reference Context:\n{context_text}\n\n"
@@ -102,11 +96,11 @@ class RegulatoryAnalysisService:
             f"- Numbered list of concrete tasks (assignable to teams)\n"
             f"- Include timeline estimates (e.g., '30 days')\n"
             f"- Mention regulatory engagement steps (e.g., 'Submit to HKMA for pre-approval')\n\n"
-            f"Maintain a formal, evidence-based tone. Avoid speculation; only use facts from the document and BCR. "
-            f"Prioritize clarity and traceability in all sections."
+            f"Maintain a formal, evidence-based tone. Avoid speculation; only use facts from the document and BCR.  "
+            f"Prioritize clarity and traceability in all sections. "
         )
 
-    def analyze_single_question(self, qid: int) -> Dict:
+    def analyze_single_question(self, qid: int, pdf_path: str) -> Dict:
         """分析单个问题，返回大模型结果"""
         start_time = time.time()
 
@@ -114,11 +108,15 @@ class RegulatoryAnalysisService:
             if qid not in REGULATORY_QUESTIONS:
                 raise ValueError(f"Invalid question ID: {qid}")
 
+            # 动态加载 PDF
+            print(f"Loading PDF: {pdf_path}")
+            base64_images = self._pdf_to_base64_images(pdf_path)
+
             question_text = REGULATORY_QUESTIONS[qid]
             context_text = self.question_contexts.get(str(qid), "Context not available")
 
             prompt = self._create_analysis_prompt(question_text, context_text)
-            answer = self._call_qwen_api(prompt, self.base64_images)
+            answer = self._call_qwen_api(prompt, base64_images)
 
             processing_time = time.time() - start_time
 
@@ -126,10 +124,11 @@ class RegulatoryAnalysisService:
                 "qid": qid,
                 "question": question_text,
                 "context": context_text,
-                "answer": answer,  # 这里就是大模型生成的完整分析结果
+                "answer": answer,
                 "status": "success",
                 "processing_time": round(processing_time, 2),
-                "timestamp": format_timestamp()
+                "timestamp": format_timestamp(),
+                "pdf_path": pdf_path
             }
         except Exception as e:
             processing_time = time.time() - start_time
@@ -137,29 +136,28 @@ class RegulatoryAnalysisService:
                 "qid": qid,
                 "question": REGULATORY_QUESTIONS.get(qid, "Unknown"),
                 "context": self.question_contexts.get(str(qid), "Context not available"),
-                "answer": f"Error: {str(e)}",  # 错误信息也直接返回
+                "answer": f"Error: {str(e)}",
                 "status": "failed",
                 "processing_time": round(processing_time, 2),
-                "timestamp": format_timestamp()
+                "timestamp": format_timestamp(),
+                "pdf_path": pdf_path
             }
 
-    def analyze_batch_questions(self, qids: List[int]) -> List[Dict]:
+    def analyze_batch_questions(self, qids: List[int], pdf_path: str) -> List[Dict]:
         """批量分析问题，返回大模型结果列表"""
         results = []
         for qid in qids:
             if qid not in REGULATORY_QUESTIONS:
                 print(f"Invalid question ID: {qid}")
                 continue
-            result = self.analyze_single_question(qid)
+            result = self.analyze_single_question(qid, pdf_path)
             results.append(result)
         return results
 
     def get_system_status(self) -> Dict:
         """获取系统状态"""
         return {
-            "pdf_loaded": self.base64_images is not None,
-            "total_questions": len(REGULATORY_QUESTIONS),
-            "processed_questions": 0,
             "api_status": "ready",
+            "total_questions": len(REGULATORY_QUESTIONS),
             "last_update": format_timestamp()
         }
