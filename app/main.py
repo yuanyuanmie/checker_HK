@@ -1,14 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from typing import List, Optional
-import time
+from typing import List
 import os
-
 from app.config import settings, REGULATORY_QUESTIONS
 from app.models import AnalysisResult, BatchAnalysisRequest, SingleAnalysisRequest
 from app.services import RegulatoryAnalysisService
-from app.utils import setup_logging, format_timestamp
+from app.utils import setup_logging
 
 # 设置日志
 setup_logging()
@@ -25,7 +22,7 @@ app = FastAPI(
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,12 +31,10 @@ app.add_middleware(
 # 全局服务实例
 analysis_service = RegulatoryAnalysisService()
 
-
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
-    print("监管合规分析 API 启动完成")
-
+    print("✅ 监管合规分析 API 启动完成")
 
 @app.get("/", summary="根路径")
 async def root():
@@ -56,12 +51,10 @@ async def root():
         }
     }
 
-
 @app.get("/status", summary="系统状态")
 async def get_system_status():
     """获取系统运行状态"""
     return analysis_service.get_system_status()
-
 
 @app.get("/questions", summary="获取所有监管问题")
 async def get_all_questions():
@@ -78,16 +71,19 @@ async def get_all_questions():
         ]
     }
 
-
 @app.post("/analyze/single", response_model=AnalysisResult, summary="分析单个问题")
 async def analyze_single_question(request: SingleAnalysisRequest):
     """分析单个监管问题，返回大模型生成的结果"""
+    # 验证问题ID
     if request.qid < 1 or request.qid > 20:
         raise HTTPException(status_code=400, detail="问题ID必须在1-20之间")
-
-    result = analysis_service.analyze_single_question(request.qid)
+    
+    # 验证 PDF 文件是否存在
+    if not os.path.exists(request.pdf_path):
+        raise HTTPException(status_code=404, detail=f"PDF 文件不存在: {request.pdf_path}")
+    
+    result = analysis_service.analyze_single_question(request.qid, request.pdf_path)
     return AnalysisResult(**result)
-
 
 @app.post("/analyze/batch", response_model=List[AnalysisResult], summary="批量分析问题")
 async def analyze_batch_questions(request: BatchAnalysisRequest):
@@ -99,17 +95,19 @@ async def analyze_batch_questions(request: BatchAnalysisRequest):
             status_code=400,
             detail=f"无效的问题ID: {invalid_qids}，必须在1-20之间"
         )
-
+    
+    # 验证 PDF 文件是否存在
+    if not os.path.exists(request.pdf_path):
+        raise HTTPException(status_code=404, detail=f"PDF 文件不存在: {request.pdf_path}")
+    
     # 如果未指定问题ID，分析所有问题
     qids_to_process = request.qids if request.qids else list(REGULATORY_QUESTIONS.keys())
-
-    results = analysis_service.analyze_batch_questions(qids_to_process)
+    
+    results = analysis_service.analyze_batch_questions(qids_to_process, request.pdf_path)
     return [AnalysisResult(**result) for result in results]
-
 
 @app.get("/health", summary="健康检查")
 async def health_check():
     """健康检查端点"""
+    from app.utils import format_timestamp
     return {"status": "healthy", "timestamp": format_timestamp()}
-
-# 简化的服务类 (app/services.py)
