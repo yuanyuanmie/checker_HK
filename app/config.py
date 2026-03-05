@@ -5,7 +5,7 @@ from pydantic import Field
 
 class Settings(BaseSettings):
     # API 配置
-    api_key: str = "sk-1cab26807b464ede94b5930079c515b7"
+    api_key: str = "sk-xxx"
     base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
     model: str = "qwen-vl-max"
     
