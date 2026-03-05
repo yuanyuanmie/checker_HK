@@ -39,10 +39,10 @@ An AI-driven regulatory compliance analysis system supporting HKMA Banking (Capi
    uvicorn app.main:app --reload
 
 2. **API Endpoints:**
-   ```bash
-  GET /: API root with description and endpoints
-  GET /status: Get system status
-  GET /questions: Get all regulatory questions
-  POST /analyze/single: Analyze one question (provide qid and pdf_path)
-  POST /analyze/batch: Analyze multiple questions (provide qids and pdf_path)
-  GET /health: Health check
+
+- `GET /` : API root with description and endpoints
+- `GET /status` : Get system status
+- `GET /questions` : Get all regulatory questions
+- `POST /analyze/single` : Analyze one question (provide `qid` and `pdf_path`)
+- `POST /analyze/batch` : Analyze multiple questions (provide `qids` and `pdf_path`)
+- `GET /health` : Health check
